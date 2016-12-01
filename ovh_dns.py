@@ -50,6 +50,10 @@ options:
         choices: ['A', 'AAAA', 'CNAME', 'DKIM', 'LOC', 'MX', 'NAPTR', 'NS', 'PTR', 'SPF', 'SRV', 'SSHFP', 'TXT']
         description:
             - Type of DNS record (A, AAAA, PTR, CNAME, etc.)
+    ttl:
+        required: false
+        decription:
+            - Time to live of the DNS record
     state:
         required: false
         default: present
@@ -81,6 +85,7 @@ EXAMPLES = '''
     domain: mydomain.com
     name: db1
     value: 10.10.10.10
+    ttl: 3600
     endpoint: ovh-eu
     application_key: yourkey
     application_secret: yoursecret
@@ -93,6 +98,7 @@ EXAMPLES = '''
     name: dbprod
     type: CNAME
     value: db1
+    ttl: 3600
     endpoint: ovh-eu
     application_key: yourkey
     application_secret: yoursecret
@@ -157,6 +163,7 @@ def main():
             name = dict(required=True),
             value = dict(default=''),
             type = dict(default='A', choices=['A', 'AAAA', 'CNAME', 'DKIM', 'LOC', 'MX', 'NAPTR', 'NS', 'PTR', 'SPF', 'SRV', 'SSHFP', 'TXT']),
+            ttl = dict(required=False),
             state = dict(default='present', choices=['present', 'absent']),
             endpoint = dict(required=True),
             application_key = dict(required=True, no_log=True),
@@ -201,16 +208,24 @@ def main():
         if name not in records:
             module.exit_json(changed=False)
 
-        # Remove the record
-        # TODO: Must check parameters
-        client.delete('/domain/zone/{}/record/{}'.format(domain, records[name]['id']))
-        client.post('/domain/zone/{}/refresh'.format(domain))
+        try:
+            # Remove the record
+            # TODO: Must check parameters
+            client.delete('/domain/zone/{}/record/{}'.format(domain, records[name]['id']))
+            client.post('/domain/zone/{}/refresh'.format(domain))
+        except APIError as error:
+            module.fail_json(
+                msg='Unable to call OVH api for deleting the record "{0}" for "{1}"". '
+                'Error returned by OVH api is: "{2}".'.format(name, domain, error)
+            )
+
         module.exit_json(changed=True)
 
     # Add / modify a record
     if state == 'present':
         fieldtype = module.params.get('type')
         targetval = module.params.get('value')
+        ttl = module.params.get('ttl')
 
         # Since we are inserting a record, we need a target
         if targetval == '':
@@ -218,14 +233,15 @@ def main():
 
         # Does the record exist already?
         if name in records:
-            if records[name]['fieldType'] == fieldtype and records[name]['target'] == targetval:
+            record = records[name]
+            if record['fieldType'] == fieldtype and record['target'] == targetval and record['ttl'] == ttl:
                 # The record is already as requested, no need to change anything
                 module.exit_json(changed=False)
 
             try:
                 # Delete and re-create the record
                 client.delete('/domain/zone/{}/record/{}'.format(domain, records[name]['id']))
-                client.post('/domain/zone/{}/record'.format(domain), fieldType=fieldtype, subDomain=name, target=targetval)
+                client.post('/domain/zone/{}/record'.format(domain), fieldType=fieldtype, subDomain=name, target=targetval, ttl=ttl)
                 client.post('/domain/zone/{}/refresh'.format(domain))
             except APIError as error:
                 module.fail_json(
@@ -237,7 +253,7 @@ def main():
 
         try:
             # Add the record
-            client.post('/domain/zone/{}/record'.format(domain), fieldType=fieldtype, subDomain=name, target=targetval)
+            client.post('/domain/zone/{}/record'.format(domain), fieldType=fieldtype, subDomain=name, target=targetval, ttl=ttl)
             client.post('/domain/zone/{}/refresh'.format(domain))
         except APIError as error:
             module.fail_json(
