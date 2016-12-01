@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/python
 # -*- coding: utf-8 -*-
 
 # ovh_dns, an Ansible module for managing OVH DNS records
@@ -45,17 +45,14 @@ options:
         description:
             - Value of the DNS record (i.e. what it points to)
     type:
-        required: false
         default: A
         choices: ['A', 'AAAA', 'CNAME', 'DKIM', 'LOC', 'MX', 'NAPTR', 'NS', 'PTR', 'SPF', 'SRV', 'SSHFP', 'TXT']
         description:
             - Type of DNS record (A, AAAA, PTR, CNAME, etc.)
     ttl:
-        required: false
         decription:
             - Time to live of the DNS record
     state:
-        required: false
         default: present
         choices: ['present', 'absent']
         description:
@@ -117,15 +114,18 @@ EXAMPLES = '''
     consumer_key: yourconsumerkey
 '''
 
+RETURN='''
+'''
+
 import os
 import sys
 
 try:
     import ovh
     from ovh.exceptions import APIError
+    HAS_OVH=True
 except ImportError:
-    print "failed=True msg='ovh required for this module'"
-    sys.exit(1)
+    HAS_OVH=False
 
 def get_ovh_client(module):
     endpoint = module.params.get('endpoint')
@@ -155,7 +155,88 @@ def get_domain_records(client, domain):
 
     return records
 
+def compute_diff(record, name, fieldtype, targetval, ttl):
+    diff = {
+        'name': 'subDomain' in record and record['subDomain'] != name and name or False,
+        'type': 'fieldType' in record and record['fieldType'] != fieldtype and fieldtype or False,
+        'value': 'target' in record and record['target'] != targetval and targetval or False,
+        'ttl': 'ttl' in record and record['ttl'] != ttl and ttl or False
+    }
 
+    return dict((key, val) for (key, val) in diff.iteritems() if val)
+
+def ensure_record_present(module, records, client, domain, name):
+    fieldtype = module.params.get('type')
+    targetval = module.params.get('value')
+    ttl = int(module.params.get('ttl'))
+
+    # Since we are inserting a record, we need a target
+    if targetval == '':
+        module.fail_json(msg='Did not specify a value')
+
+    # Does the record exist already?
+    if name in records:
+        record = records[name]
+        diff   = compute_diff(record, name, fieldtype, targetval, ttl)
+
+        if len(diff) == 0:
+            # The record is already as requested, no need to change anything
+            module.exit_json(changed=False)
+
+        if module.check_mode:
+            module.exit_json(changed=True, diff=diff)
+
+        try:
+            # Delete and re-create the record
+            client.delete('/domain/zone/{}/record/{}'.format(domain, records[name]['id']))
+            client.post('/domain/zone/{}/record'.format(domain), fieldType=fieldtype, subDomain=name, target=targetval, ttl=ttl)
+            client.post('/domain/zone/{}/refresh'.format(domain))
+        except APIError as error:
+            module.fail_json(
+                msg='Unable to call OVH api for recreating the record "{0} {1} {2}". '
+                'Error returned by OVH api is: "{3}".'.format(name, fieldtype, targetval, error)
+            )
+
+        module.exit_json(changed=True)
+
+    if module.check_mode:
+        module.exit_json(changed=True, diff=compute_diff(record, name, fieldtype, targetval, ttl))
+
+    try:
+        # Add the record
+        client.post('/domain/zone/{}/record'.format(domain), fieldType=fieldtype, subDomain=name, target=targetval, ttl=ttl)
+        client.post('/domain/zone/{}/refresh'.format(domain))
+    except APIError as error:
+        module.fail_json(
+            msg='Unable to call OVH api for adding the record "{0} {1} {2}". '
+            'Error returned by OVH api is: "{3}".'.format(name, fieldtype, targetval, error)
+        )
+
+    module.exit_json(changed=True)
+
+def ensure_record_absent(module, records, client, domain, name):
+    # Are we done yet?
+    #if name not in records or records[name]['fieldType'] != fieldtype or records[name]['target'] != targetval:
+    if name not in records:
+        module.exit_json(changed=False)
+
+    if module.check_mode:
+        module.exit_json(changed=True)
+
+    try:
+        # Remove the record
+        # TODO: Must check parameters
+        client.delete('/domain/zone/{}/record/{}'.format(domain, records[name]['id']))
+        client.post('/domain/zone/{}/refresh'.format(domain))
+    except APIError as error:
+        module.fail_json(
+            msg='Unable to call OVH api for deleting the record "{0}" for "{1}"". '
+            'Error returned by OVH api is: "{2}".'.format(name, domain, error)
+        )
+
+    module.exit_json(changed=True)
+
+# @TODO: Add support for check_mode
 def main():
     module = AnsibleModule(
         argument_spec = dict(
@@ -169,8 +250,12 @@ def main():
             application_key = dict(required=True, no_log=True),
             application_secret = dict(required=True, no_log=True),
             consumer_key = dict(required=True, no_log=True),
-        )
+        ),
+        supports_check_mode=True
     )
+
+    if not HAS_OVH:
+        module.fail_json(msg='ovh python module is required to run this module.')
 
     # Get parameters
     domain = module.params.get('domain')
@@ -201,67 +286,10 @@ def main():
             'Error returned by OVH api is: "{1}".'.format(domain, error)
         )
 
-    # Remove a record
     if state == 'absent':
-        # Are we done yet?
-        #if name not in records or records[name]['fieldType'] != fieldtype or records[name]['target'] != targetval:
-        if name not in records:
-            module.exit_json(changed=False)
-
-        try:
-            # Remove the record
-            # TODO: Must check parameters
-            client.delete('/domain/zone/{}/record/{}'.format(domain, records[name]['id']))
-            client.post('/domain/zone/{}/refresh'.format(domain))
-        except APIError as error:
-            module.fail_json(
-                msg='Unable to call OVH api for deleting the record "{0}" for "{1}"". '
-                'Error returned by OVH api is: "{2}".'.format(name, domain, error)
-            )
-
-        module.exit_json(changed=True)
-
-    # Add / modify a record
-    if state == 'present':
-        fieldtype = module.params.get('type')
-        targetval = module.params.get('value')
-        ttl = module.params.get('ttl')
-
-        # Since we are inserting a record, we need a target
-        if targetval == '':
-            module.fail_json(msg='Did not specify a value')
-
-        # Does the record exist already?
-        if name in records:
-            record = records[name]
-            if record['fieldType'] == fieldtype and record['target'] == targetval and record['ttl'] == ttl:
-                # The record is already as requested, no need to change anything
-                module.exit_json(changed=False)
-
-            try:
-                # Delete and re-create the record
-                client.delete('/domain/zone/{}/record/{}'.format(domain, records[name]['id']))
-                client.post('/domain/zone/{}/record'.format(domain), fieldType=fieldtype, subDomain=name, target=targetval, ttl=ttl)
-                client.post('/domain/zone/{}/refresh'.format(domain))
-            except APIError as error:
-                module.fail_json(
-                    msg='Unable to call OVH api for recreating the record "{0} {1} {2}". '
-                    'Error returned by OVH api is: "{3}".'.format(name, fieldtype, targetval, error)
-                )
-
-            module.exit_json(changed=True)
-
-        try:
-            # Add the record
-            client.post('/domain/zone/{}/record'.format(domain), fieldType=fieldtype, subDomain=name, target=targetval, ttl=ttl)
-            client.post('/domain/zone/{}/refresh'.format(domain))
-        except APIError as error:
-            module.fail_json(
-                msg='Unable to call OVH api for adding the record "{0} {1} {2}". '
-                'Error returned by OVH api is: "{3}".'.format(name, fieldtype, targetval, error)
-            )
-
-        module.exit_json(changed=True)
+        ensure_record_absent(module, records, client, domain, name)
+    elif state == 'present':
+        ensure_record_present(module, records, client, domain, name)
 
     # We should never reach here
     module.fail_json(msg='Internal ovh_dns module error')
