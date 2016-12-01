@@ -25,6 +25,11 @@ author: Carlos Izquierdo
 short_description: Manage OVH DNS records
 description:
     - Manage OVH (French European hosting provider) DNS records
+
+notes:
+    - Uses the python OVH Api U(https://github.com/ovh/python-ovh).
+      You have to create an application (a key and secret) with a consummer
+      key as described into U(https://eu.api.ovh.com/g934.first_step_with_api)
 requirements: [ "ovh" ]
 options:
     domain:
@@ -55,13 +60,27 @@ options:
 
 EXAMPLES = '''
 # Create a typical A record
-- ovh_dns: state=present domain=mydomain.com name=db1 value=10.10.10.10
+- ovh_dns:
+    state: present
+    domain: mydomain.com
+    name: db1
+    value: 10.10.10.10
 
 # Create a CNAME record
-- ovh_dns: state=present domain=mydomain.com name=dbprod type=cname value=db1
+- ovh_dns:
+    state: present
+    domain: mydomain.com
+    name: dbprod
+    type: CNAME
+    value: db1
 
 # Delete an existing record, must specify all parameters
-- ovh_dns: state=absent domain=mydomain.com name=dbprod type=cname value=db1
+- ovh_dns:
+    state: absent
+    domain: mydomain.com
+    name: dbprod
+    type: CNAME
+    value: db1
 '''
 
 import os
@@ -179,4 +198,5 @@ def main():
 # import module snippets
 from ansible.module_utils.basic import *
 
-main()
+if __name__ == '__main__':
+    main()
