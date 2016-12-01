@@ -56,6 +56,22 @@ options:
         choices: ['present', 'absent']
         description:
             - Determines wether the record is to be created/modified or deleted
+    endpoint:
+        required: true
+        description:
+            - The endpoint to use ( for instance ovh-eu)
+    application_key:
+        required: true
+        description:
+            - The applicationKey to use
+    application_secret:
+        required: true
+        description:
+            - The application secret to use
+    consumer_key:
+        required: true
+        description:
+            - The consumer key to use
 '''
 
 EXAMPLES = '''
@@ -65,6 +81,10 @@ EXAMPLES = '''
     domain: mydomain.com
     name: db1
     value: 10.10.10.10
+    endpoint: ovh-eu
+    application_key: yourkey
+    application_secret: yoursecret
+    consumer_key: yourconsumerkey
 
 # Create a CNAME record
 - ovh_dns:
@@ -73,6 +93,10 @@ EXAMPLES = '''
     name: dbprod
     type: CNAME
     value: db1
+    endpoint: ovh-eu
+    application_key: yourkey
+    application_secret: yoursecret
+    consumer_key: yourconsumerkey
 
 # Delete an existing record, must specify all parameters
 - ovh_dns:
@@ -81,6 +105,10 @@ EXAMPLES = '''
     name: dbprod
     type: CNAME
     value: db1
+    endpoint: ovh-eu
+    application_key: yourkey
+    application_secret: yoursecret
+    consumer_key: yourconsumerkey
 '''
 
 import os
@@ -92,21 +120,18 @@ except ImportError:
     print "failed=True msg='ovh required for this module'"
     sys.exit(1)
 
+def get_ovh_client(module):
+    endpoint = module.params.get('endpoint')
+    application_key = module.params.get('application_key')
+    application_secret = module.params.get('application_secret')
+    consumer_key = module.params.get('consumer_key')
 
-# TODO: Try to automate this in case the supplied credentials are not valid
-def get_credentials():
-    """This function is used to obtain an authentication token.
-    It should only be called once."""
-    client = ovh.Client()
-    access_rules = [
-        {'method': 'GET', 'path': '/domain/*'},
-        {'method': 'PUT', 'path': '/domain/*'},
-        {'method': 'POST', 'path': '/domain/*'},
-        {'method': 'DELETE', 'path': '/domain/*'},
-    ]
-    validation = client.request_consumerkey(access_rules)
-    print("Your consumer key is {}".format(validation['consumerKey']))
-    print("Please visit {} to validate".format(validation['validationUrl']))
+    return ovh.Client(
+        endpoint=endpoint,
+        application_key=application_key,
+        application_secret=application_secret,
+        consumer_key=consumer_key
+    )
 
 
 def get_domain_records(client, domain):
@@ -115,6 +140,7 @@ def get_domain_records(client, domain):
 
     # List all ids and then get info for each one
     record_ids = client.get('/domain/zone/{}/record'.format(domain))
+
     for record_id in record_ids:
         info = client.get('/domain/zone/{}/record/{}'.format(domain, record_id))
         # TODO: Cannot aggregate based only on name, must use record type and target as well
@@ -131,6 +157,10 @@ def main():
             value = dict(default=''),
             type = dict(default='A', choices=['A', 'AAAA', 'CNAME', 'DKIM', 'LOC', 'MX', 'NAPTR', 'NS', 'PTR', 'SPF', 'SRV', 'SSHFP', 'TXT']),
             state = dict(default='present', choices=['present', 'absent']),
+            endpoint = dict(required=True),
+            application_key = dict(required=True, no_log=True),
+            application_secret = dict(required=True, no_log=True),
+            consumer_key = dict(required=True, no_log=True),
         )
     )
 
@@ -139,8 +169,7 @@ def main():
     name   = module.params.get('name')
     state  = module.params.get('state')
 
-    # Connect to OVH API
-    client = ovh.Client()
+    client = get_ovh_client(module)
 
     # Check that the domain exists
     domains = client.get('/domain/zone')
