@@ -116,6 +116,7 @@ import sys
 
 try:
     import ovh
+    from ovh.exceptions import APIError
 except ImportError:
     print "failed=True msg='ovh required for this module'"
     sys.exit(1)
@@ -171,13 +172,27 @@ def main():
 
     client = get_ovh_client(module)
 
-    # Check that the domain exists
-    domains = client.get('/domain/zone')
+    try:
+        # Check that the domain exists
+        domains = client.get('/domain/zone')
+    except APIError as error:
+        module.fail_json(
+            msg='Unable to call OVH api for getting the list of domains. '
+            'Check application key, secret, consumer key & parameters. '
+            'Error returned by OVH api is: "{0}".'.format(error)
+        )
+
     if not domain in domains:
         module.fail_json(msg='Domain {} does not exist'.format(domain))
 
-    # Obtain all domain records to check status against what is demanded
-    records = get_domain_records(client, domain)
+    try:
+        # Obtain all domain records to check status against what is demanded
+        records = get_domain_records(client, domain)
+    except APIError as error:
+        module.fail_json(
+            msg='Unable to call OVH api for getting the list of records for "{0}". '
+            'Error returned by OVH api is: "{1}".'.format(domain, error)
+        )
 
     # Remove a record
     if state == 'absent':
@@ -207,17 +222,29 @@ def main():
                 # The record is already as requested, no need to change anything
                 module.exit_json(changed=False)
 
-            # Delete and re-create the record
-            client.delete('/domain/zone/{}/record/{}'.format(domain, records[name]['id']))
-            client.post('/domain/zone/{}/record'.format(domain), fieldType=fieldtype, subDomain=name, target=targetval)
+            try:
+                # Delete and re-create the record
+                client.delete('/domain/zone/{}/record/{}'.format(domain, records[name]['id']))
+                client.post('/domain/zone/{}/record'.format(domain), fieldType=fieldtype, subDomain=name, target=targetval)
+                client.post('/domain/zone/{}/refresh'.format(domain))
+            except APIError as error:
+                module.fail_json(
+                    msg='Unable to call OVH api for recreating the record "{0} {1} {2}". '
+                    'Error returned by OVH api is: "{3}".'.format(name, fieldtype, targetval, error)
+                )
 
-            # Refresh the zone and exit
-            client.post('/domain/zone/{}/refresh'.format(domain))
             module.exit_json(changed=True)
 
-        # Add the record
-        client.post('/domain/zone/{}/record'.format(domain), fieldType=fieldtype, subDomain=name, target=targetval)
-        client.post('/domain/zone/{}/refresh'.format(domain))
+        try:
+            # Add the record
+            client.post('/domain/zone/{}/record'.format(domain), fieldType=fieldtype, subDomain=name, target=targetval)
+            client.post('/domain/zone/{}/refresh'.format(domain))
+        except APIError as error:
+            module.fail_json(
+                msg='Unable to call OVH api for adding the record "{0} {1} {2}". '
+                'Error returned by OVH api is: "{3}".'.format(name, fieldtype, targetval, error)
+            )
+
         module.exit_json(changed=True)
 
     # We should never reach here
